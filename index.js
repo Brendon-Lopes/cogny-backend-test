@@ -1,6 +1,7 @@
 const { DATABASE_SCHEMA, DATABASE_URL, SHOW_PG_MONITOR } = require('./config');
 const massive = require('massive');
 const monitor = require('pg-monitor');
+const axios = require('axios');
 
 // Call start
 (async () => {
@@ -62,20 +63,64 @@ const monitor = require('pg-monitor');
         });
     };
 
+    const fetchData = async () => {
+        const { data: { data } } = await axios.get('https://datausa.io/api/data?drilldowns=Nation&measures=Population');
+        return data;
+    }
+
+    const insertData = async (data) => {
+        await Promise.all(data.map((item) => {
+            db[DATABASE_SCHEMA].api_data.insert({
+                doc_record: item
+            });
+        }));
+        console.log('data inserted to database')
+    }
+
+    const sumPopulationJs = (data, fromYear, toYear) => {
+        return data.reduce((acc, { doc_record }) => {
+            const year = Number(doc_record.Year);
+            const population = doc_record.Population
+
+            if (year >= fromYear && year <= toYear) acc += population;
+
+            return acc;
+        }, 0);
+    }
+
     try {
         await migrationUp();
 
-        //exemplo de insert
-        const result1 = await db[DATABASE_SCHEMA].api_data.insert({
-            doc_record: { 'a': 'b' },
-        })
-        console.log('result1 >>>', result1);
+        // adiciona os dados da api no banco de dados
+        await insertData(await fetchData());
 
-        //exemplo select
-        const result2 = await db[DATABASE_SCHEMA].api_data.find({
+        // busca os dados do banco de dados
+        const data = await db[DATABASE_SCHEMA].api_data.find({
             is_active: true
         });
-        console.log('result2 >>>', result2);
+
+        // soma as populações usando apenas JS
+        const sumJavascript = sumPopulationJs(data, 2018, 2020);
+
+        // cria uma view da soma das populações
+        await db.query(`
+            CREATE VIEW ${DATABASE_SCHEMA}.soma_populacao AS
+            SELECT SUM((doc_record ->> 'Population')::INTEGER) AS soma_populacao
+            FROM ${DATABASE_SCHEMA}.api_data
+            WHERE (doc_record ->> 'Year')::INTEGER BETWEEN 2018 AND 2020;
+        `);
+
+        // busca a soma das populações pela view criada
+        const [sumView] = await db.query(
+            `SELECT * FROM ${DATABASE_SCHEMA}.soma_populacao;`
+        );
+
+        const result = [
+            { method: 'SQL Query', populationSum: Number(sumView.soma_populacao) },
+            { method: 'JavaScriptl', populationSum: sumJavascript }
+        ]
+
+        console.table(result);
 
     } catch (e) {
         console.log(e.message)
