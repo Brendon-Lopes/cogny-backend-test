@@ -38,6 +38,8 @@ const monitor = require('pg-monitor');
       is_active: true
     });
 
+    await db.query(`DROP VIEW IF EXISTS ${DATABASE_SCHEMA}.soma_populacao;`)
+
     console.log({ data });
 
   } catch (e) {
